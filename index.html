@@ -40,7 +40,7 @@
   .status{display:flex;align-items:center;gap:8px;font:500 13px/1.3 "JetBrains Mono",monospace;color:var(--muted);min-height:20px}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:0 0 auto}
   .dot.on{background:var(--ok)} .dot.err{background:var(--warn)} .dot.busy{background:var(--sage-2)}
-  .log{font:500 12px/1.5 "JetBrains Mono",monospace;color:var(--muted);white-space:pre-wrap;word-break:break-word;margin-top:8px;max-height:120px;overflow:auto}
+  .log{font:500 12px/1.5 "JetBrains Mono",monospace;color:var(--muted);white-space:pre-wrap;word-break:break-word;margin-top:8px;max-height:140px;overflow:auto}
   .hint{font-size:13px;color:var(--muted);line-height:1.5}
   .mb8{margin-bottom:8px}
 </style>
@@ -68,7 +68,6 @@
 <p class="hint" style="text-align:center">Meet tot stabiel of max. 10 s. SG &#x2192; measured OG/FG of grafiek; pH &#x2192; grafiek (Custom Stream).</p>
 
 <script>
-// ---------- MD5 (voor pH2Go IV; Web Crypto kan geen MD5) ----------
 function md5bytes(bytes){
   const rl=(x,c)=>(x<<c)|(x>>>(32-c)), add=(a,b)=>(a+b)|0;
   const s=[7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
@@ -92,14 +91,13 @@ function md5bytes(bytes){
   return out;
 }
 
-// ---------- UUIDs ----------
 const ED={svc:"41500000-d278-11eb-b8bc-0242ac130003",dens:"41500001-d278-11eb-b8bc-0242ac130003",
   temp:"41500002-d278-11eb-b8bc-0242ac130003",cmd:"41500003-d278-11eb-b8bc-0242ac130003"};
 const PH={svc:"09900000-0000-18a2-803d-e4a6eb999090",io:"0000fff1-0000-1000-8000-00805f9b34fb",
   nonce:"0000fff0-0000-1000-8000-00805f9b34fb"};
 const DIS="0000180a-0000-1000-8000-00805f9b34fb";
-const C_SERIAL="00002a25-0000-1000-8000-00805f9b34fb"; // board serial
-const C_SYSID ="00002a23-0000-1000-8000-00805f9b34fb"; // system id
+const C_SERIAL="00002a25-0000-1000-8000-00805f9b34fb";
+const C_SYSID ="00002a23-0000-1000-8000-00805f9b34fb";
 const ZIV=new Uint8Array(16);
 const $=id=>document.getElementById(id);
 
@@ -108,12 +106,12 @@ function rhoWater(T){const n=999.83952+16.945176*T-7.9870401e-3*T*T-46.170461e-6
 const RHO20=rhoWater(20);
 const toSG=(rho,T)=>(rho+(RHO20-rhoWater(T)))/RHO20;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function readStr(svcOrServer,uuid){ // read a DIS string
+async function readStr(svcOrServer,uuid){
   const dis=await svcOrServer.getPrimaryService(DIS);
   const dv=await (await dis.getCharacteristic(uuid)).readValue();
   let s="";for(let i=0;i<dv.byteLength;i++){const b=dv.getUint8(i);if(b===0)break;s+=String.fromCharCode(b);} return s;
 }
-async function readBytes(server,uuid){ // read a DIS characteristic as raw bytes
+async function readBytes(server,uuid){
   const dis=await server.getPrimaryService(DIS);
   const dv=await (await dis.getCharacteristic(uuid)).readValue();
   return new Uint8Array(dv.buffer.slice(0,dv.byteLength));
@@ -123,7 +121,6 @@ const hex=u=>[...u].map(x=>x.toString(16).padStart(2,"0")).join("");
 const devices=[];
 let batchesLoaded=false;
 
-// ---------- connect & identify ----------
 async function connect(){
   try{
     setState("Zoeken\u2026","busy");
@@ -145,7 +142,6 @@ async function connect(){
   }catch(e){ setState("Fout: "+(e.message||e),"err"); }
 }
 
-// ---------- device card ----------
 function makeCard(title,sn){
   const c=document.createElement("div"); c.className="card";
   c.innerHTML=`<div class="ctitle"><b>${title}</b><span class="sn">${sn}</span></div>
@@ -162,7 +158,6 @@ function makeCard(title,sn){
 function cardStatus(c){ return (t,cls)=>{ c.querySelector(".st").textContent=t; c.querySelector(".d").className="dot d"+(cls?" "+cls:""); }; }
 function cardLog(c){ return s=>{ const l=c.querySelector(".log"); l.textContent=(l.textContent?l.textContent+"\n":"")+s; l.scrollTop=l.scrollHeight; }; }
 
-// ======================= EasyDens =======================
 async function setupED(dev,server,svc){
   const sn=await readStr(server,C_SERIAL);
   const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(sn.repeat(4)),{name:"AES-CBC"},false,["encrypt","decrypt"]);
@@ -172,7 +167,6 @@ async function setupED(dev,server,svc){
   const D={type:"ed",dev,key,cmdC,alive:true,density:null,temp:null,measuring:false,samples:[],timer:null,card,
     setStatus:cardStatus(card),log:cardLog(card),target:"measuredFg"};
   devices.push(D);
-  // write controls
   card.querySelector(".wrap").innerHTML=`<label>Schrijf SG naar</label>
     <select class="tgt" style="margin-bottom:12px">
       <option value="measuredFg" selected>Measured FG</option>
@@ -224,24 +218,19 @@ async function writeED(D){const sg=toSG(D.density,D.temp),t=D.card.querySelector
     D.setStatus(ok?"Weggeschreven \u2713":"Mislukt","on");}
   catch(e){D.log("Netwerkfout");D.setStatus("Fout","err");}finally{renderED(D);}}
 
-// ======================= pH2Go =======================
 async function setupPH(dev,server,svc){
   const sysB=await readBytes(server,C_SYSID), boardB=await readBytes(server,C_SERIAL);
   const board=await readStr(server,C_SERIAL);
   const xor=new Uint8Array(8); for(let i=0;i<8;i++) xor[i]=(sysB[i]||0)^(boardB[i]||0);
   const keyBytes=new Uint8Array([0x41,0x83,0xA3,...xor,0x50,0xD1,0x50,0x29,0x9D]);
   const key=await crypto.subtle.importKey("raw",keyBytes,{name:"AES-CBC"},false,["encrypt","decrypt"]);
-  const nref=await svc.getCharacteristic(PH.nonce);
-  const ndv=await nref.readValue(); const nonce=new Uint8Array(ndv.buffer.slice(0,20));
-  const iv=md5bytes(nonce.slice(3,19));
   const io=await svc.getCharacteristic(PH.io);
-  const diag="v8 handshake\nsys "+hex(sysB)+"\nser "+hex(boardB)+"\niv  "+hex(iv);
+  const nref=await svc.getCharacteristic(PH.nonce);
   const card=makeCard("pH2Go","SN "+board);
   card.querySelector(".k1").textContent="pH";
-  const D={type:"ph",dev,key,iv,io,alive:true,ph:null,temp:null,mv:null,cal:null,measuring:false,card,
+  const D={type:"ph",dev,key,iv:null,io,nref,alive:true,ph:null,temp:null,mv:null,cal:null,measuring:false,card,
     setStatus:cardStatus(card),log:cardLog(card),buf:new Uint8Array(0),pending:null};
   devices.push(D);
-  D.log(diag);
   card.querySelector(".wrap").innerHTML=`<label>Schrijf pH naar</label>
     <select class="tgt" style="margin-bottom:12px">
       <option value="stream" selected>Grafiek (Custom Stream)</option>
@@ -252,7 +241,6 @@ async function setupPH(dev,server,svc){
   card.querySelector(".meet").addEventListener("click",()=>measurePH(D));
   card.querySelector(".w").addEventListener("click",()=>writePH(D));
   await io.startNotifications();
-  D.log("fff1: "+["read","write","writeWithoutResponse","notify","indicate"].filter(k=>io.properties[k]).join(","));
   io.addEventListener("characteristicvaluechanged",async e=>{
     const chunk=new Uint8Array(e.target.value.buffer);
     D.log("rx "+chunk.length+"B");
@@ -261,12 +249,11 @@ async function setupPH(dev,server,svc){
       const pt=await crypto.subtle.decrypt({name:"AES-CBC",iv:D.iv},D.key,D.buf);
       const obj=JSON.parse(new TextDecoder().decode(pt).replace(/\0+$/,"").trim());
       const r=D.pending;D.pending=null;D.buf=new Uint8Array(0);if(r)r(obj);
-    }catch(err){/* onvolledig, wachten */}}});
-  // handshake zoals de officiele Anton Paar-app: eerst 'led' om de sessie te wekken
-  await sleep(400);
+    }catch(err){}}});
+  D.log("v9");
+  // led-handshake; reqPH leest de nonce zelf vlak voor het schrijven (vers, geen vertraging)
   try{const l=await reqPH(D,{op:"led"},4000);D.log("led: "+JSON.stringify(l).slice(0,80));}
   catch(e){D.log("led timeout");}
-  // kalibratie ophalen (met herpogingen)
   let calLoaded=false;
   for(let attempt=1;attempt<=3&&!calLoaded;attempt++){
     try{const c=await reqPH(D,{op:"rcalib"},5000);
@@ -277,9 +264,12 @@ async function setupPH(dev,server,svc){
       else D.log("kalib-vorm onbekend (poging "+attempt+")");
     }catch(e){D.log("kalib timeout (poging "+attempt+")");}
   }
-  if(!calLoaded)D.log("kalibratie niet gelezen \u2014 meet toch; pH komt van de meter als die 'm teruggeeft");
+  if(!calLoaded)D.log("kalibratie niet gelezen \u2014 meet toch");
 }
 async function reqPH(D,obj,timeout){
+  // nonce vers lezen en IV afleiden vlak voor elk commando (nonce kan per connectie/tijd wijzigen)
+  const ndv=await D.nref.readValue(); const nonce=new Uint8Array(ndv.buffer.slice(0,20));
+  D.iv=md5bytes(nonce.slice(3,19));
   const data=new TextEncoder().encode(JSON.stringify(obj));
   const ab=await crypto.subtle.encrypt({name:"AES-CBC",iv:D.iv},D.key,data);
   const p=new Promise((res,rej)=>{D.pending=res;setTimeout(()=>{if(D.pending===res){D.pending=null;rej(new Error("timeout"));}},timeout||3000);});
@@ -321,7 +311,6 @@ async function writePH(D){const t=D.card.querySelector(".tgt").value;
     D.setStatus(ok?"Weggeschreven \u2713":"Mislukt","on");}
   catch(e){D.log("Netwerkfout");D.setStatus("Fout","err");}finally{renderPH(D);}}
 
-// ---------- batches ----------
 async function loadBatches(){const sel=$("batch");
   try{const r=await fetch("/api/batches");const d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
     if(!d.batches.length){sel.innerHTML="<option value=''>Geen batches</option>";return;}
