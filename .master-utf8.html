@@ -235,12 +235,13 @@ async function setupPH(dev,server,svc){
   const ndv=await nref.readValue(); const nonce=new Uint8Array(ndv.buffer.slice(0,20));
   const iv=md5bytes(nonce.slice(3,19));
   const io=await svc.getCharacteristic(PH.io);
-  console.log("pH2Go sys="+hex(sysB)+" ser="+hex(boardB)+" nonce="+hex(nonce)+" iv="+hex(iv));
+  const diag="v8 handshake\nsys "+hex(sysB)+"\nser "+hex(boardB)+"\niv  "+hex(iv);
   const card=makeCard("pH2Go","SN "+board);
   card.querySelector(".k1").textContent="pH";
   const D={type:"ph",dev,key,iv,io,alive:true,ph:null,temp:null,mv:null,cal:null,measuring:false,card,
     setStatus:cardStatus(card),log:cardLog(card),buf:new Uint8Array(0),pending:null};
   devices.push(D);
+  D.log(diag);
   card.querySelector(".wrap").innerHTML=`<label>Schrijf pH naar</label>
     <select class="tgt" style="margin-bottom:12px">
       <option value="stream" selected>Grafiek (Custom Stream)</option>
@@ -261,8 +262,11 @@ async function setupPH(dev,server,svc){
       const obj=JSON.parse(new TextDecoder().decode(pt).replace(/\0+$/,"").trim());
       const r=D.pending;D.pending=null;D.buf=new Uint8Array(0);if(r)r(obj);
     }catch(err){/* onvolledig, wachten */}}});
-  // kalibratie ophalen (met korte wachttijd + herpogingen; iOS BLE kan traag opstarten)
-  await sleep(500);
+  // handshake zoals de officiele Anton Paar-app: eerst 'led' om de sessie te wekken
+  await sleep(400);
+  try{const l=await reqPH(D,{op:"led"},4000);D.log("led: "+JSON.stringify(l).slice(0,80));}
+  catch(e){D.log("led timeout");}
+  // kalibratie ophalen (met herpogingen)
   let calLoaded=false;
   for(let attempt=1;attempt<=3&&!calLoaded;attempt++){
     try{const c=await reqPH(D,{op:"rcalib"},5000);
@@ -295,7 +299,7 @@ async function measurePH(D){if(D.measuring)return;D.measuring=true;
   D.card.querySelector(".meet").disabled=true;D.card.querySelector(".meet").textContent="Meten…";D.setStatus("Meten…","busy");
   const samples=[],t0=Date.now();
   while(Date.now()-t0<10000){
-    let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){break;}
+    let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){D.log("meas timeout");break;}
     if(r){ if(samples.length===0)D.log("meas: "+JSON.stringify(r).slice(0,140));
       if(typeof r.mv==="number")D.mv=r.mv;
       if(typeof r.t==="number")D.temp=r.t;

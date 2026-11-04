@@ -235,7 +235,7 @@ async function setupPH(dev,server,svc){
   const ndv=await nref.readValue(); const nonce=new Uint8Array(ndv.buffer.slice(0,20));
   const iv=md5bytes(nonce.slice(3,19));
   const io=await svc.getCharacteristic(PH.io);
-  const diag="sys "+hex(sysB)+"\nser "+hex(boardB)+"\niv  "+hex(iv);
+  const diag="v8 handshake\nsys "+hex(sysB)+"\nser "+hex(boardB)+"\niv  "+hex(iv);
   const card=makeCard("pH2Go","SN "+board);
   card.querySelector(".k1").textContent="pH";
   const D={type:"ph",dev,key,iv,io,alive:true,ph:null,temp:null,mv:null,cal:null,measuring:false,card,
