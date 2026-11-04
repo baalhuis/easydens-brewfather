@@ -244,8 +244,10 @@ async function setupPH(dev,server,svc){
   card.querySelector(".meet").addEventListener("click",()=>measurePH(D));
   card.querySelector(".w").addEventListener("click",()=>writePH(D));
   await io.startNotifications();
+  D.log("fff1: "+["read","write","writeWithoutResponse","notify","indicate"].filter(k=>io.properties[k]).join(","));
   io.addEventListener("characteristicvaluechanged",async e=>{
     const chunk=new Uint8Array(e.target.value.buffer);
+    D.log("rx "+chunk.length+"B");
     const nb=new Uint8Array(D.buf.length+chunk.length);nb.set(D.buf);nb.set(chunk,D.buf.length);D.buf=nb;
     if(D.buf.length%16===0){try{
       const pt=await crypto.subtle.decrypt({name:"AES-CBC",iv:D.iv},D.key,D.buf);
@@ -271,7 +273,9 @@ async function reqPH(D,obj,timeout){
   const ab=await crypto.subtle.encrypt({name:"AES-CBC",iv:D.iv},D.key,data);
   const p=new Promise((res,rej)=>{D.pending=res;setTimeout(()=>{if(D.pending===res){D.pending=null;rej(new Error("timeout"));}},timeout||3000);});
   D.buf=new Uint8Array(0);
-  await D.io.writeValueWithResponse(new Uint8Array(ab));
+  const payload=new Uint8Array(ab);
+  try{ if(D.io.properties.write) await D.io.writeValueWithResponse(payload); else await D.io.writeValueWithoutResponse(payload); }
+  catch(err){ try{ await D.io.writeValueWithoutResponse(payload); }catch(e2){ D.log("write faalt: "+(e2.message||e2)); throw e2; } }
   return p;
 }
 const phFrom=(D,mv)=>D.cal?D.cal.p+(mv-D.cal.m)*D.cal.slope:null;
