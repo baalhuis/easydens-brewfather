@@ -235,12 +235,13 @@ async function setupPH(dev,server,svc){
   const ndv=await nref.readValue(); const nonce=new Uint8Array(ndv.buffer.slice(0,20));
   const iv=md5bytes(nonce.slice(3,19));
   const io=await svc.getCharacteristic(PH.io);
-  console.log("pH2Go sys="+hex(sysB)+" ser="+hex(boardB)+" nonce="+hex(nonce)+" iv="+hex(iv));
+  const diag="sys "+hex(sysB)+"\nser "+hex(boardB)+"\niv  "+hex(iv);
   const card=makeCard("pH2Go","SN "+board);
   card.querySelector(".k1").textContent="pH";
   const D={type:"ph",dev,key,iv,io,alive:true,ph:null,temp:null,mv:null,cal:null,measuring:false,card,
     setStatus:cardStatus(card),log:cardLog(card),buf:new Uint8Array(0),pending:null};
   devices.push(D);
+  D.log(diag);
   card.querySelector(".wrap").innerHTML=`<label>Schrijf pH naar</label>
     <select class="tgt" style="margin-bottom:12px">
       <option value="stream" selected>Grafiek (Custom Stream)</option>
@@ -295,7 +296,7 @@ async function measurePH(D){if(D.measuring)return;D.measuring=true;
   D.card.querySelector(".meet").disabled=true;D.card.querySelector(".meet").textContent="Meten\u2026";D.setStatus("Meten\u2026","busy");
   const samples=[],t0=Date.now();
   while(Date.now()-t0<10000){
-    let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){break;}
+    let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){D.log("meas timeout");break;}
     if(r){ if(samples.length===0)D.log("meas: "+JSON.stringify(r).slice(0,140));
       if(typeof r.mv==="number")D.mv=r.mv;
       if(typeof r.t==="number")D.temp=r.t;
