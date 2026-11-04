@@ -240,6 +240,7 @@ async function setupPH(dev,server,svc){
   card.querySelector(".tgt").addEventListener("change",()=>renderPH(D));
   card.querySelector(".meet").addEventListener("click",()=>measurePH(D));
   card.querySelector(".w").addEventListener("click",()=>writePH(D));
+  card.querySelector(".meet").disabled=true; // pas meten na handshake
   await io.startNotifications();
   io.addEventListener("characteristicvaluechanged",async e=>{
     const chunk=new Uint8Array(e.target.value.buffer);
@@ -250,7 +251,7 @@ async function setupPH(dev,server,svc){
       const obj=JSON.parse(new TextDecoder().decode(pt).replace(/\0+$/,"").trim());
       const r=D.pending;D.pending=null;D.buf=new Uint8Array(0);if(r)r(obj);
     }catch(err){}}});
-  D.log("v9");
+  D.log("v10");
   // led-handshake; reqPH leest de nonce zelf vlak voor het schrijven (vers, geen vertraging)
   try{const l=await reqPH(D,{op:"led"},4000);D.log("led: "+JSON.stringify(l).slice(0,80));}
   catch(e){D.log("led timeout");}
@@ -265,6 +266,7 @@ async function setupPH(dev,server,svc){
     }catch(e){D.log("kalib timeout (poging "+attempt+")");}
   }
   if(!calLoaded)D.log("kalibratie niet gelezen \u2014 meet toch");
+  D.card.querySelector(".meet").disabled=false;
 }
 async function reqPH(D,obj,timeout){
   // nonce vers lezen en IV afleiden vlak voor elk commando (nonce kan per connectie/tijd wijzigen)
@@ -287,18 +289,20 @@ function renderPH(D){D.card.querySelector(".v1").textContent=D.ph!=null?D.ph.toF
   D.card.querySelector(".w").disabled=D.measuring||D.ph==null||(t!=="stream"&&!$("batch").value);}
 async function measurePH(D){if(D.measuring)return;D.measuring=true;
   D.card.querySelector(".meet").disabled=true;D.card.querySelector(".meet").textContent="Meten\u2026";D.setStatus("Meten\u2026","busy");
-  const samples=[],t0=Date.now();
-  while(Date.now()-t0<10000){
-    let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){D.log("meas timeout");break;}
-    if(r){ if(samples.length===0)D.log("meas: "+JSON.stringify(r).slice(0,140));
-      if(typeof r.mv==="number")D.mv=r.mv;
-      if(typeof r.t==="number")D.temp=r.t;
-      const dph=(typeof r.ph==="number")?r.ph:phFrom(D,typeof r.mv==="number"?r.mv:null);
-      if(dph!=null){D.ph=dph;renderPH(D);samples.push(dph);const last=samples.slice(-5);
-        if(last.length>=5&&Math.max(...last)-Math.min(...last)<0.02)break;}
-      else renderPH(D);}
+  try{await reqPH(D,{op:"led"},3000);}catch(e){} // wek de meter uit standby
+  const samples=[],t0=Date.now();let got=0;
+  while(Date.now()-t0<12000){
+    let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){await sleep(300);continue;}
+    got++;if(got===1)D.log("meas: "+JSON.stringify(r).slice(0,140));
+    if(typeof r.mv==="number")D.mv=r.mv;
+    if(typeof r.t==="number")D.temp=r.t;
+    const dph=(typeof r.ph==="number")?r.ph:phFrom(D,typeof r.mv==="number"?r.mv:null);
+    if(dph!=null){D.ph=dph;renderPH(D);samples.push(dph);const last=samples.slice(-5);
+      if(last.length>=5&&Math.max(...last)-Math.min(...last)<0.02)break;}
+    else renderPH(D);
     await sleep(400);
   }
+  if(got===0)D.log("meas: geen antwoord (meter in standby? tik nogmaals Meet)");
   D.measuring=false;D.card.querySelector(".meet").disabled=false;D.card.querySelector(".meet").textContent="Meet";
   D.setStatus(D.ph!=null?"Stabiel \u2713 pH "+D.ph.toFixed(2):"Geen meting",D.ph!=null?"on":"err");renderPH(D);}
 async function writePH(D){const t=D.card.querySelector(".tgt").value;
