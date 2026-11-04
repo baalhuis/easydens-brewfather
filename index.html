@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Anton Paar → Brewfather</title>
+<title>Anton Paar &#x2192; Brewfather</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -46,7 +46,7 @@
 </style>
 </head>
 <body>
-<header><h1>Anton Paar → Brewfather</h1><span class="sub" id="hdr">meter + pH</span></header>
+<header><h1>Anton Paar &#x2192; Brewfather</h1><span class="sub" id="hdr">meter + pH</span></header>
 
 <div id="nobluetooth" class="card" style="display:none">
   <p class="hint"><b>Web Bluetooth niet beschikbaar.</b> Open deze pagina in de <b>Bluefy</b>-browser (App Store). Safari en Chrome op iOS ondersteunen geen BLE.</p>
@@ -55,17 +55,17 @@
 <div class="card">
   <div class="status mb8"><span class="dot" id="dot"></span><span id="state">Niet verbonden</span></div>
   <button id="connect" class="btn-primary">Verbind apparaat</button>
-  <p class="hint" style="margin:10px 0 0;text-align:center">EasyDens en pH2Go kunnen allebei tegelijk verbonden zijn — tik per meter één keer.</p>
+  <p class="hint" style="margin:10px 0 0;text-align:center">EasyDens en pH2Go kunnen allebei tegelijk verbonden zijn &#x2014; tik per meter &#xe9;&#xe9;n keer.</p>
 </div>
 
 <div id="devices"></div>
 
 <div class="card" id="batchCard" style="display:none">
   <label for="batch">Brewfather-batch (voor measured OG/FG)</label>
-  <select id="batch"><option>Laden…</option></select>
+  <select id="batch"><option>Laden&#x2026;</option></select>
 </div>
 
-<p class="hint" style="text-align:center">Meet tot stabiel of max. 10 s. SG → measured OG/FG of grafiek; pH → grafiek (Custom Stream).</p>
+<p class="hint" style="text-align:center">Meet tot stabiel of max. 10 s. SG &#x2192; measured OG/FG of grafiek; pH &#x2192; grafiek (Custom Stream).</p>
 
 <script>
 // ---------- MD5 (voor pH2Go IV; Web Crypto kan geen MD5) ----------
@@ -120,11 +120,11 @@ let batchesLoaded=false;
 // ---------- connect & identify ----------
 async function connect(){
   try{
-    setState("Zoeken…","busy");
+    setState("Zoeken\u2026","busy");
     const dev=await navigator.bluetooth.requestDevice({
       filters:[{services:[ED.svc]},{services:[PH.svc]}],
       optionalServices:[DIS,ED.svc,PH.svc]});
-    setState("Verbinden…","busy");
+    setState("Verbinden\u2026","busy");
     const server=await dev.gatt.connect();
     let type=null,svc=null;
     try{ svc=await server.getPrimaryService(ED.svc); type="easydens"; }catch(e){}
@@ -144,8 +144,8 @@ function makeCard(title,sn){
   const c=document.createElement("div"); c.className="card";
   c.innerHTML=`<div class="ctitle"><b>${title}</b><span class="sn">${sn}</span></div>
     <button class="btn-primary meet mb8">Meet</button>
-    <div class="readout"><div class="metric"><div class="v v1">—</div><div class="k k1"></div></div>
-    <div class="metric alt"><div class="v v2">—</div><div class="k">Temp °C</div></div></div>
+    <div class="readout"><div class="metric"><div class="v v1">\u2014</div><div class="k k1"></div></div>
+    <div class="metric alt"><div class="v v2">\u2014</div><div class="k">Temp \u00b0C</div></div></div>
     <div class="raw"></div>
     <div class="wrap" style="margin-top:14px"></div>
     <div class="status" style="margin-top:10px"><span class="dot d"></span><span class="st">Klaar</span></div>
@@ -162,7 +162,7 @@ async function setupED(dev,server,svc){
   const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(sn.repeat(4)),{name:"AES-CBC"},false,["encrypt","decrypt"]);
   const densC=await svc.getCharacteristic(ED.dens), tempC=await svc.getCharacteristic(ED.temp), cmdC=await svc.getCharacteristic(ED.cmd);
   const card=makeCard("EasyDens","SN "+sn);
-  card.querySelector(".k1").textContent="SG (20 °C)";
+  card.querySelector(".k1").textContent="SG (20 \u00b0C)";
   const D={type:"ed",dev,key,cmdC,alive:true,density:null,temp:null,measuring:false,samples:[],timer:null,card,
     setStatus:cardStatus(card),log:cardLog(card),target:"measuredFg"};
   devices.push(D);
@@ -191,31 +191,31 @@ async function setupED(dev,server,svc){
       if(last.length>=5&&Math.max(...last)-Math.min(...last)<0.0003)finishED(D,"stable");}});
 }
 function renderED(D){const sg=(D.density!=null&&D.temp!=null)?toSG(D.density,D.temp):null;
-  D.card.querySelector(".v1").textContent=sg!=null?sg.toFixed(4):"—";
-  D.card.querySelector(".v2").textContent=D.temp!=null?D.temp.toFixed(2):"—";
-  D.card.querySelector(".raw").textContent=D.density!=null?`ruwe dichtheid ${D.density.toFixed(5)} g/cm³`:"";
+  D.card.querySelector(".v1").textContent=sg!=null?sg.toFixed(4):"\u2014";
+  D.card.querySelector(".v2").textContent=D.temp!=null?D.temp.toFixed(2):"\u2014";
+  D.card.querySelector(".raw").textContent=D.density!=null?`ruwe dichtheid ${D.density.toFixed(5)} g/cm\u00b3`:"";
   const t=D.card.querySelector(".tgt")?.value;
   D.card.querySelector(".w").disabled=D.measuring||sg==null||(t!=="stream"&&!$("batch").value);}
 async function sendED(D,arr){const ab=await crypto.subtle.encrypt({name:"AES-CBC",iv:ZIV},D.key,new Uint8Array(arr));
   const ct=new Uint8Array(ab),f=new Uint8Array(2+ct.length);f[0]=0x80;f[1]=ct.length;f.set(ct,2);await D.cmdC.writeValueWithResponse(f);}
 async function measureED(D){if(D.measuring)return;D.measuring=true;D.samples=[];D.density=null;
-  D.card.querySelector(".meet").disabled=true;D.card.querySelector(".meet").textContent="Meten…";D.setStatus("Meten…","busy");renderED(D);
+  D.card.querySelector(".meet").disabled=true;D.card.querySelector(".meet").textContent="Meten\u2026";D.setStatus("Meten\u2026","busy");renderED(D);
   try{await sendED(D,[1,0]);}catch(e){D.measuring=false;D.card.querySelector(".meet").disabled=false;D.card.querySelector(".meet").textContent="Meet";D.setStatus("Startfout","err");return;}
   D.timer=setTimeout(()=>finishED(D,"timeout"),10000);}
 async function finishED(D,reason){if(!D.measuring)return;D.measuring=false;clearTimeout(D.timer);
   try{await sendED(D,[2]);}catch(e){}
   D.card.querySelector(".meet").disabled=false;D.card.querySelector(".meet").textContent="Meet";
   const sg=(D.density!=null&&D.temp!=null)?toSG(D.density,D.temp):null;
-  D.setStatus(sg!=null?(reason==="stable"?"Stabiel ✓ SG "+sg.toFixed(4):"Gestopt (10 s) SG "+sg.toFixed(4)):"Geen meting",sg!=null?"on":"err");renderED(D);}
+  D.setStatus(sg!=null?(reason==="stable"?"Stabiel \u2713 SG "+sg.toFixed(4):"Gestopt (10 s) SG "+sg.toFixed(4)):"Geen meting",sg!=null?"on":"err");renderED(D);}
 const FIELD_LABEL={measuredFg:"Measured FG",measuredOg:"Measured OG",measuredFirstWortGravity:"First Wort",measuredPreBoilGravity:"Pre-Boil",measuredPostBoilGravity:"Post-Boil",measuredMashPh:"Mash pH"};
 async function writeED(D){const sg=toSG(D.density,D.temp),t=D.card.querySelector(".tgt").value;
   const body=t==="stream"?{sg,temp:D.temp,deviceName:"EasyDens",patch:false,stream:true}
     :{batchId:$("batch").value,sg,temp:D.temp,field:t,deviceName:"EasyDens",patch:true,stream:false};
-  D.card.querySelector(".w").disabled=true;D.setStatus("Schrijven…","busy");
+  D.card.querySelector(".w").disabled=true;D.setStatus("Schrijven\u2026","busy");
   try{const r=await fetch("/api/write",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const d=await r.json();const res=t==="stream"?d.results?.stream:d.results?.patch;const ok=!!res?.ok;
-    D.log(`SG ${d.sg} → ${t==="stream"?"grafiek":(FIELD_LABEL[t]||t)}: ${ok?"ok":"FOUT "+(res?.status||res?.error||"")}`);
-    D.setStatus(ok?"Weggeschreven ✓":"Mislukt","on");}
+    D.log(`SG ${d.sg} \u2192 ${t==="stream"?"grafiek":(FIELD_LABEL[t]||t)}: ${ok?"ok":"FOUT "+(res?.status||res?.error||"")}`);
+    D.setStatus(ok?"Weggeschreven \u2713":"Mislukt","on");}
   catch(e){D.log("Netwerkfout");D.setStatus("Fout","err");}finally{renderED(D);}}
 
 // ======================= pH2Go =======================
@@ -268,13 +268,13 @@ async function reqPH(D,obj,timeout){
   return p;
 }
 const phFrom=(D,mv)=>D.cal?D.cal.p+(mv-D.cal.m)*D.cal.slope:null;
-function renderPH(D){D.card.querySelector(".v1").textContent=D.ph!=null?D.ph.toFixed(2):"—";
-  D.card.querySelector(".v2").textContent=D.temp!=null?D.temp.toFixed(2):"—";
+function renderPH(D){D.card.querySelector(".v1").textContent=D.ph!=null?D.ph.toFixed(2):"\u2014";
+  D.card.querySelector(".v2").textContent=D.temp!=null?D.temp.toFixed(2):"\u2014";
   D.card.querySelector(".raw").textContent=D.mv!=null?`${D.mv.toFixed(1)} mV`:"";
   const t=D.card.querySelector(".tgt")?.value;
   D.card.querySelector(".w").disabled=D.measuring||D.ph==null||(t!=="stream"&&!$("batch").value);}
 async function measurePH(D){if(D.measuring)return;D.measuring=true;
-  D.card.querySelector(".meet").disabled=true;D.card.querySelector(".meet").textContent="Meten…";D.setStatus("Meten…","busy");
+  D.card.querySelector(".meet").disabled=true;D.card.querySelector(".meet").textContent="Meten\u2026";D.setStatus("Meten\u2026","busy");
   const samples=[],t0=Date.now();
   while(Date.now()-t0<10000){
     let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){break;}
@@ -284,15 +284,15 @@ async function measurePH(D){if(D.measuring)return;D.measuring=true;
     await sleep(400);
   }
   D.measuring=false;D.card.querySelector(".meet").disabled=false;D.card.querySelector(".meet").textContent="Meet";
-  D.setStatus(D.ph!=null?"Stabiel ✓ pH "+D.ph.toFixed(2):"Geen meting",D.ph!=null?"on":"err");renderPH(D);}
+  D.setStatus(D.ph!=null?"Stabiel \u2713 pH "+D.ph.toFixed(2):"Geen meting",D.ph!=null?"on":"err");renderPH(D);}
 async function writePH(D){const t=D.card.querySelector(".tgt").value;
   const body=t==="stream"?{ph:D.ph,temp:D.temp,deviceName:"pH2Go",patch:false,stream:true}
     :{batchId:$("batch").value,ph:D.ph,temp:D.temp,field:"measuredMashPh",deviceName:"pH2Go",patch:true,stream:false};
-  D.card.querySelector(".w").disabled=true;D.setStatus("Schrijven…","busy");
+  D.card.querySelector(".w").disabled=true;D.setStatus("Schrijven\u2026","busy");
   try{const r=await fetch("/api/write",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const d=await r.json();const res=t==="stream"?d.results?.stream:d.results?.patch;const ok=!!res?.ok;
-    D.log(`pH ${d.ph} → ${t==="stream"?"grafiek":"Mash pH"}: ${ok?"ok":"FOUT "+(res?.status||res?.error||"")}`);
-    D.setStatus(ok?"Weggeschreven ✓":"Mislukt","on");}
+    D.log(`pH ${d.ph} \u2192 ${t==="stream"?"grafiek":"Mash pH"}: ${ok?"ok":"FOUT "+(res?.status||res?.error||"")}`);
+    D.setStatus(ok?"Weggeschreven \u2713":"Mislukt","on");}
   catch(e){D.log("Netwerkfout");D.setStatus("Fout","err");}finally{renderPH(D);}}
 
 // ---------- batches ----------
@@ -300,7 +300,7 @@ async function loadBatches(){const sel=$("batch");
   try{const r=await fetch("/api/batches");const d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
     if(!d.batches.length){sel.innerHTML="<option value=''>Geen batches</option>";return;}
     sel.innerHTML=d.batches.map(b=>{const beer=(b.recipe&&b.recipe.trim())?b.recipe.trim():(b.name||"");
-      const label=`Batch #${b.batchNo??"?"}${beer?" - "+beer:""}${b.status?" · "+b.status:""}`;
+      const label=`Batch #${b.batchNo??"?"}${beer?" - "+beer:""}${b.status?" \u00b7 "+b.status:""}`;
       return `<option value="${b.id}">${label.replace(/"/g,"&quot;")}</option>`;}).join("");}
   catch(e){sel.innerHTML=`<option value=''>Batches laden mislukt (${e.message||e})</option>`;}}
 
