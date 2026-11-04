@@ -55,7 +55,7 @@
 <div class="card">
   <div class="status mb8"><span class="dot" id="dot"></span><span id="state">Niet verbonden</span></div>
   <button id="connect" class="btn-primary">Verbind apparaat</button>
-  <p class="hint" style="margin:10px 0 0;text-align:center">EasyDens en pH2Go kunnen allebei tegelijk verbonden zijn &#x2014; tik per meter &#xe9;&#xe9;n keer.</p>
+  <p class="hint" style="margin:10px 0 0;text-align:center">EasyDens en pH2Go kunnen allebei tegelijk verbonden zijn &#x2014; tik per meter &#xe9;&#xe9;n keer en kies hem uit de lijst.</p>
 </div>
 
 <div id="devices"></div>
@@ -122,7 +122,7 @@ async function connect(){
   try{
     setState("Zoeken\u2026","busy");
     const dev=await navigator.bluetooth.requestDevice({
-      filters:[{services:[ED.svc]},{services:[PH.svc]}],
+      acceptAllDevices:true,
       optionalServices:[DIS,ED.svc,PH.svc]});
     setState("Verbinden\u2026","busy");
     const server=await dev.gatt.connect();
