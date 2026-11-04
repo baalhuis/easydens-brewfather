@@ -113,6 +113,12 @@ async function readStr(svcOrServer,uuid){ // read a DIS string
   const dv=await (await dis.getCharacteristic(uuid)).readValue();
   let s="";for(let i=0;i<dv.byteLength;i++){const b=dv.getUint8(i);if(b===0)break;s+=String.fromCharCode(b);} return s;
 }
+async function readBytes(server,uuid){ // read a DIS characteristic as raw bytes
+  const dis=await server.getPrimaryService(DIS);
+  const dv=await (await dis.getCharacteristic(uuid)).readValue();
+  return new Uint8Array(dv.buffer.slice(0,dv.byteLength));
+}
+const hex=u=>[...u].map(x=>x.toString(16).padStart(2,"0")).join("");
 
 const devices=[];
 let batchesLoaded=false;
@@ -220,15 +226,16 @@ async function writeED(D){const sg=toSG(D.density,D.temp),t=D.card.querySelector
 
 // ======================= pH2Go =======================
 async function setupPH(dev,server,svc){
-  const sys=await readStr(server,C_SYSID), board=await readStr(server,C_SERIAL);
-  const a=new TextEncoder().encode(sys), b=new TextEncoder().encode(board);
-  const xor=new Uint8Array(8); for(let i=0;i<8;i++) xor[i]=(a[i]||0)^(b[i]||0);
+  const sysB=await readBytes(server,C_SYSID), boardB=await readBytes(server,C_SERIAL);
+  const board=await readStr(server,C_SERIAL);
+  const xor=new Uint8Array(8); for(let i=0;i<8;i++) xor[i]=(sysB[i]||0)^(boardB[i]||0);
   const keyBytes=new Uint8Array([0x41,0x83,0xA3,...xor,0x50,0xD1,0x50,0x29,0x9D]);
   const key=await crypto.subtle.importKey("raw",keyBytes,{name:"AES-CBC"},false,["encrypt","decrypt"]);
   const nref=await svc.getCharacteristic(PH.nonce);
   const ndv=await nref.readValue(); const nonce=new Uint8Array(ndv.buffer.slice(0,20));
   const iv=md5bytes(nonce.slice(3,19));
   const io=await svc.getCharacteristic(PH.io);
+  console.log("pH2Go sys="+hex(sysB)+" ser="+hex(boardB)+" nonce="+hex(nonce)+" iv="+hex(iv));
   const card=makeCard("pH2Go","SN "+board);
   card.querySelector(".k1").textContent="pH";
   const D={type:"ph",dev,key,iv,io,alive:true,ph:null,temp:null,mv:null,cal:null,measuring:false,card,
@@ -244,27 +251,38 @@ async function setupPH(dev,server,svc){
   card.querySelector(".meet").addEventListener("click",()=>measurePH(D));
   card.querySelector(".w").addEventListener("click",()=>writePH(D));
   await io.startNotifications();
+  D.log("fff1: "+["read","write","writeWithoutResponse","notify","indicate"].filter(k=>io.properties[k]).join(","));
   io.addEventListener("characteristicvaluechanged",async e=>{
     const chunk=new Uint8Array(e.target.value.buffer);
+    D.log("rx "+chunk.length+"B");
     const nb=new Uint8Array(D.buf.length+chunk.length);nb.set(D.buf);nb.set(chunk,D.buf.length);D.buf=nb;
     if(D.buf.length%16===0){try{
       const pt=await crypto.subtle.decrypt({name:"AES-CBC",iv:D.iv},D.key,D.buf);
       const obj=JSON.parse(new TextDecoder().decode(pt).replace(/\0+$/,"").trim());
       const r=D.pending;D.pending=null;D.buf=new Uint8Array(0);if(r)r(obj);
     }catch(err){/* onvolledig, wachten */}}});
-  // kalibratie ophalen
-  try{const c=await reqPH(D,{op:"rcalib"},4000);
-    if(c&&Array.isArray(c.calib)&&c.calib.length>=2){const[p,q]=c.calib;
-      D.cal={m:q.mv,p:q.ph,slope:(p.ph-q.ph)/(p.mv-q.mv)};
-      D.log(`kalib: pH${p.ph}@${p.mv} / pH${q.ph}@${q.mv}`);}
-  }catch(e){D.log("kalibratie niet gelezen");}
+  // kalibratie ophalen (met korte wachttijd + herpogingen; iOS BLE kan traag opstarten)
+  await sleep(500);
+  let calLoaded=false;
+  for(let attempt=1;attempt<=3&&!calLoaded;attempt++){
+    try{const c=await reqPH(D,{op:"rcalib"},5000);
+      D.log("rcalib: "+JSON.stringify(c).slice(0,140));
+      if(c&&Array.isArray(c.calib)&&c.calib.length>=2){const[p,q]=c.calib;
+        D.cal={m:q.mv,p:q.ph,slope:(p.ph-q.ph)/(p.mv-q.mv)};
+        D.log(`kalib: pH${p.ph}@${p.mv} / pH${q.ph}@${q.mv}`);calLoaded=true;}
+      else D.log("kalib-vorm onbekend (poging "+attempt+")");
+    }catch(e){D.log("kalib timeout (poging "+attempt+")");}
+  }
+  if(!calLoaded)D.log("kalibratie niet gelezen — meet toch; pH komt van de meter als die 'm teruggeeft");
 }
 async function reqPH(D,obj,timeout){
   const data=new TextEncoder().encode(JSON.stringify(obj));
   const ab=await crypto.subtle.encrypt({name:"AES-CBC",iv:D.iv},D.key,data);
   const p=new Promise((res,rej)=>{D.pending=res;setTimeout(()=>{if(D.pending===res){D.pending=null;rej(new Error("timeout"));}},timeout||3000);});
   D.buf=new Uint8Array(0);
-  await D.io.writeValueWithResponse(new Uint8Array(ab));
+  const payload=new Uint8Array(ab);
+  try{ if(D.io.properties.write) await D.io.writeValueWithResponse(payload); else await D.io.writeValueWithoutResponse(payload); }
+  catch(err){ try{ await D.io.writeValueWithoutResponse(payload); }catch(e2){ D.log("write faalt: "+(e2.message||e2)); throw e2; } }
   return p;
 }
 const phFrom=(D,mv)=>D.cal?D.cal.p+(mv-D.cal.m)*D.cal.slope:null;
@@ -278,9 +296,13 @@ async function measurePH(D){if(D.measuring)return;D.measuring=true;
   const samples=[],t0=Date.now();
   while(Date.now()-t0<10000){
     let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){break;}
-    if(r&&typeof r.mv==="number"){D.mv=r.mv;D.temp=r.t;D.ph=phFrom(D,r.mv);renderPH(D);
-      if(D.ph!=null){samples.push(D.ph);const last=samples.slice(-5);
-        if(last.length>=5&&Math.max(...last)-Math.min(...last)<0.02)break;}}
+    if(r){ if(samples.length===0)D.log("meas: "+JSON.stringify(r).slice(0,140));
+      if(typeof r.mv==="number")D.mv=r.mv;
+      if(typeof r.t==="number")D.temp=r.t;
+      const dph=(typeof r.ph==="number")?r.ph:phFrom(D,typeof r.mv==="number"?r.mv:null);
+      if(dph!=null){D.ph=dph;renderPH(D);samples.push(dph);const last=samples.slice(-5);
+        if(last.length>=5&&Math.max(...last)-Math.min(...last)<0.02)break;}
+      else renderPH(D);}
     await sleep(400);
   }
   D.measuring=false;D.card.querySelector(".meet").disabled=false;D.card.querySelector(".meet").textContent="Meet";

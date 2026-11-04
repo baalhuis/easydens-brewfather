@@ -113,6 +113,12 @@ async function readStr(svcOrServer,uuid){ // read a DIS string
   const dv=await (await dis.getCharacteristic(uuid)).readValue();
   let s="";for(let i=0;i<dv.byteLength;i++){const b=dv.getUint8(i);if(b===0)break;s+=String.fromCharCode(b);} return s;
 }
+async function readBytes(server,uuid){ // read a DIS characteristic as raw bytes
+  const dis=await server.getPrimaryService(DIS);
+  const dv=await (await dis.getCharacteristic(uuid)).readValue();
+  return new Uint8Array(dv.buffer.slice(0,dv.byteLength));
+}
+const hex=u=>[...u].map(x=>x.toString(16).padStart(2,"0")).join("");
 
 const devices=[];
 let batchesLoaded=false;
@@ -220,15 +226,16 @@ async function writeED(D){const sg=toSG(D.density,D.temp),t=D.card.querySelector
 
 // ======================= pH2Go =======================
 async function setupPH(dev,server,svc){
-  const sys=await readStr(server,C_SYSID), board=await readStr(server,C_SERIAL);
-  const a=new TextEncoder().encode(sys), b=new TextEncoder().encode(board);
-  const xor=new Uint8Array(8); for(let i=0;i<8;i++) xor[i]=(a[i]||0)^(b[i]||0);
+  const sysB=await readBytes(server,C_SYSID), boardB=await readBytes(server,C_SERIAL);
+  const board=await readStr(server,C_SERIAL);
+  const xor=new Uint8Array(8); for(let i=0;i<8;i++) xor[i]=(sysB[i]||0)^(boardB[i]||0);
   const keyBytes=new Uint8Array([0x41,0x83,0xA3,...xor,0x50,0xD1,0x50,0x29,0x9D]);
   const key=await crypto.subtle.importKey("raw",keyBytes,{name:"AES-CBC"},false,["encrypt","decrypt"]);
   const nref=await svc.getCharacteristic(PH.nonce);
   const ndv=await nref.readValue(); const nonce=new Uint8Array(ndv.buffer.slice(0,20));
   const iv=md5bytes(nonce.slice(3,19));
   const io=await svc.getCharacteristic(PH.io);
+  console.log("pH2Go sys="+hex(sysB)+" ser="+hex(boardB)+" nonce="+hex(nonce)+" iv="+hex(iv));
   const card=makeCard("pH2Go","SN "+board);
   card.querySelector(".k1").textContent="pH";
   const D={type:"ph",dev,key,iv,io,alive:true,ph:null,temp:null,mv:null,cal:null,measuring:false,card,
