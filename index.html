@@ -262,8 +262,11 @@ async function setupPH(dev,server,svc){
       const obj=JSON.parse(new TextDecoder().decode(pt).replace(/\0+$/,"").trim());
       const r=D.pending;D.pending=null;D.buf=new Uint8Array(0);if(r)r(obj);
     }catch(err){/* onvolledig, wachten */}}});
-  // kalibratie ophalen (met korte wachttijd + herpogingen; iOS BLE kan traag opstarten)
-  await sleep(500);
+  // handshake zoals de officiele Anton Paar-app: eerst 'led' om de sessie te wekken
+  await sleep(400);
+  try{const l=await reqPH(D,{op:"led"},4000);D.log("led: "+JSON.stringify(l).slice(0,80));}
+  catch(e){D.log("led timeout");}
+  // kalibratie ophalen (met herpogingen)
   let calLoaded=false;
   for(let attempt=1;attempt<=3&&!calLoaded;attempt++){
     try{const c=await reqPH(D,{op:"rcalib"},5000);
