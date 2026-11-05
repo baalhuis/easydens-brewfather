@@ -165,7 +165,7 @@ async function connect(kind){
       picked={dev,server,svc,type};
     }
     const {dev,server,svc,type}=picked;
-    dev.addEventListener("gattserverdisconnected",()=>{ const d=devices.find(x=>x.dev===dev); if(d){d.alive=false;d.setStatus("Verbinding verbroken","err");} });
+    dev.addEventListener("gattserverdisconnected",()=>{ const d=devices.find(x=>x.dev===dev); if(d){d.alive=false;if(!d.reconnecting)d.setStatus("Verbinding verbroken","err");} });
     if(type==="easydens") await setupED(dev,server,svc);
     else await setupPH(dev,server,svc);
     setState("Verbonden","on");
@@ -271,15 +271,15 @@ async function setupPH(dev,server,svc){
   card.querySelector(".meet").addEventListener("click",()=>measurePH(D));
   card.querySelector(".w").addEventListener("click",()=>writePH(D));
   card.querySelector(".meet").disabled=true;
-  io.addEventListener("characteristicvaluechanged",e=>onPhChunk(D,e.target.value));
+  D.onChunk=e=>onPhChunk(D,e.target.value); // vaste functie-referentie: nooit dubbel geregistreerd
+  io.addEventListener("characteristicvaluechanged",D.onChunk);
   await readIV(D);
   D.log("verbonden");
-  // Handshake zoals de officiele app. De eerste led dient ook om een eventueel vervuilde meterbuffer leeg te maken.
-  for(let a=1;a<=2;a++){
-    try{const r=await reqPH(D,{op:"led"},2500,"led"); if(r.op!==false)break; D.log("led: meterfout e="+r.e);}
-    catch(e){D.log("led: geen antwoord"); await readIV(D).catch(()=>{});}
-  }
-  await loadCal(D);
+  // Geen enkel antwoord = meter hangt nog in een oude sessie (bv. browser niet netjes afgesloten).
+  // Dan de verbinding volledig verbreken en opnieuw opbouwen: de software-versie van uit/aan zetten.
+  let ok=await handshakePH(D);
+  for(let r=1;!ok&&r<=2;r++){ D.log("geen antwoord: verbinding opnieuw opbouwen ("+r+"/2)"); ok=(await reconnectPH(D,r*2000))&&(await handshakePH(D)); }
+  if(ok) await loadCal(D); else D.log("meter reageert niet: zet de pH2Go uit en aan en verbind opnieuw");
   D.card.querySelector(".meet").disabled=false;
   D.setStatus(D.cal?"Klaar":"Klaar (kalibratie niet gelezen)",D.cal?"":"err");
 }
@@ -302,8 +302,36 @@ async function phDecode(key,iv,buf){
   return null;
 }
 // De nonce (en dus de IV) is vast per verbinding: de officiele app leest hem een keer.
-async function readIV(D){ D.iv=md5bytes(u8(await D.nref.readValue()).slice(3,19)); }
+async function readIV(D){ const n=u8(await D.nref.readValue()).slice(); D.iv=md5bytes(n.slice(3,19)); D.log("sessie "+hex(n.slice(0,3))); }
+// Handshake (led). True zodra de meter iets terugstuurt, ook een foutantwoord: dan leeft de sessie.
+async function handshakePH(D){
+  for(let a=1;a<=2;a++){
+    try{const r=await reqPH(D,{op:"led"},2500,"led"); if(r.op===false)D.log("led: meterfout e="+r.e); return true;}
+    catch(e){D.log("led: "+rxInfo(e));}
+  }
+  return false;
+}
+const rxInfo=e=>e&&e.rx>0?"antwoord niet te ontcijferen ("+e.rx+" bytes)":"geen antwoord (0 bytes ontvangen)";
+// Volledig verbreken en opnieuw verbinden, zodat de meter een verse sessie (nieuwe nonce) start.
+async function reconnectPH(D,waitMs){
+  D.reconnecting=true;
+  try{ if(D.dev.gatt.connected) D.dev.gatt.disconnect(); }catch(e){}
+  await sleep(waitMs||2000); // iOS breekt de radioverbinding soms pas na een paar seconden echt af
+  try{
+    const server=await D.dev.gatt.connect();
+    const svc=await server.getPrimaryService(PH.svc);
+    D.io=await svc.getCharacteristic(PH.io);
+    D.nref=await svc.getCharacteristic(PH.nonce);
+    D.io.addEventListener("characteristicvaluechanged",D.onChunk);
+    D.toggle=true; D.alive=true; D.buf=new Uint8Array(0);
+    await readIV(D);
+    D.log("opnieuw verbonden");
+    return true;
+  }catch(e){ D.log("opnieuw verbinden mislukt: "+(e.message||e)); return false; }
+  finally{ D.reconnecting=false; }
+}
 async function onPhChunk(D,v){
+  D.rx=(D.rx||0)+v.byteLength;
   const w=D.waiter; if(!w)return; // niemand wacht op antwoord: late/oude stukjes weggooien
   const c=u8(v), nb=new Uint8Array(D.buf.length+c.length); nb.set(D.buf); nb.set(c,D.buf.length);
   D.buf=nb.length>2048?nb.slice(nb.length-2048):nb;
@@ -321,8 +349,9 @@ function reqPH(D,obj,timeout,expect){
       catch(e){ D.toggle=false; D.log("notificaties blijvend aan ("+(e.message||e)+")"); try{await D.io.startNotifications();}catch(_){} }
     }
     D.buf=new Uint8Array(0);
+    const rx0=D.rx||0;
     let w; const p=new Promise((res,rej)=>{
-      const t=setTimeout(()=>{ if(D.waiter===w)D.waiter=null; rej(new Error("timeout")); },timeout||3000);
+      const t=setTimeout(()=>{ if(D.waiter===w)D.waiter=null; const er=new Error("timeout"); er.rx=(D.rx||0)-rx0; rej(er); },timeout||3000);
       w={expect,done:o=>{clearTimeout(t);res(o);}}; D.waiter=w;
     });
     p.catch(()=>{});
@@ -349,7 +378,7 @@ async function loadCal(D){
         D.log("kalib"+(c.bufferset?" ("+c.bufferset+")":"")+": "+D.cal.map(x=>"pH "+x.ph+" @ "+x.mv.toFixed(1)+" mV").join(" / "));
         return true;
       } else D.log("kalibratie: onbekend formaat");
-    }catch(e){ D.log("kalibratie: geen antwoord (poging "+a+")"); await readIV(D).catch(()=>{}); }
+    }catch(e){ D.log("kalibratie: "+rxInfo(e)+" (poging "+a+")"); await readIV(D).catch(()=>{}); }
     await sleep(300);
   }
   D.log("kalibratie niet gelezen");
@@ -370,11 +399,14 @@ async function measurePH(D){if(D.measuring)return;D.measuring=true;
   const btn=D.card.querySelector(".meet");btn.disabled=true;btn.textContent="Meten\u2026";D.setStatus("Meten\u2026","busy");
   D.ph=null;renderPH(D);
   if(!D.cal){ D.log("kalibratie opnieuw lezen"); await loadCal(D); }
-  const samples=[],t0=Date.now();let got=0,stable=false,lastErr=null;
+  const samples=[],t0=Date.now();let got=0,stable=false,lastErr=null,miss=0,rec=0;
   while(Date.now()-t0<20000){
     let r;
-    try{r=await reqPH(D,{op:"meas"},4000,"mv");}
-    catch(e){D.log("meting: geen antwoord, opnieuw");await readIV(D).catch(()=>{});continue;}
+    try{r=await reqPH(D,{op:"meas"},4000,"mv");miss=0;}
+    catch(e){D.log("meting: "+rxInfo(e)+", opnieuw");
+      if(++miss>=2&&rec<1){rec++;miss=0;D.log("verbinding opnieuw opbouwen");if(await reconnectPH(D))await handshakePH(D);}
+      else await readIV(D).catch(()=>{});
+      continue;}
     if(r.op===false){lastErr=r.e;D.log("meting: meterfout e="+r.e+", opnieuw");await sleep(800);continue;}
     got++;if(got===1)D.log("meting: "+JSON.stringify(r).slice(0,120));
     if(typeof r.mv==="number")D.mv=r.mv;
@@ -411,6 +443,8 @@ async function loadBatches(){const sel=$("batch");
 $("batch").addEventListener("change",()=>devices.forEach(D=>D.type==="ed"?renderED(D):renderPH(D)));
 $("connectEd").addEventListener("click",()=>connect("ed"));
 $("connectPh").addEventListener("click",()=>connect("ph"));
+// Pagina sluiten/herladen: verbindingen netjes verbreken, zodat de meters geen oude sessie vasthouden.
+addEventListener("pagehide",()=>devices.forEach(d=>{try{if(d.dev.gatt.connected)d.dev.gatt.disconnect();}catch(e){}}));
 if(!navigator.bluetooth){$("nobluetooth").style.display="block";$("connectEd").disabled=true;$("connectPh").disabled=true;setState("Geen Web Bluetooth","err");}
 </script>
 </body>
