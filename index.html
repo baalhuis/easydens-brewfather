@@ -259,19 +259,22 @@ async function setupPH(dev,server,svc){
       const r=D.pending;D.pending=null;D.buf=new Uint8Array(0);if(r)r(obj);
     }catch(err){}}});
   D.log("verbonden");
-  try{const l=await reqPH(D,{op:"led"},4000);D.log("led: "+JSON.stringify(l).slice(0,80));}
-  catch(e){D.log("led timeout");}
-  let calLoaded=false;
-  for(let attempt=1;attempt<=3&&!calLoaded;attempt++){
+  await sleep(700); // even opwarmen; de eerste commando's na verbinden kunnen anders wegvallen
+  try{await reqPH(D,{op:"led"},4000);}catch(e){D.log("led timeout");}
+  await loadCal(D);
+  D.card.querySelector(".meet").disabled=false;
+}
+async function loadCal(D){
+  for(let a=1;a<=4;a++){
     try{const c=await reqPH(D,{op:"rcalib"},5000);
       if(c&&Array.isArray(c.calib)&&c.calib.length>=2){const[p,q]=c.calib;
         D.cal={m:q.mv,p:q.ph,slope:(p.ph-q.ph)/(p.mv-q.mv)};
-        D.log(`kalib: pH${p.ph}@${p.mv} / pH${q.ph}@${q.mv}`);calLoaded=true;}
-      else D.log("kalib-vorm onbekend (poging "+attempt+")");
-    }catch(e){D.log("kalib timeout (poging "+attempt+")");}
+        D.log(`kalib: pH${p.ph}@${p.mv} / pH${q.ph}@${q.mv}`);return true;}
+    }catch(e){D.log("kalib timeout (poging "+a+")");}
+    await sleep(400);
   }
-  if(!calLoaded)D.log("kalibratie niet gelezen \u2014 meet toch");
-  D.card.querySelector(".meet").disabled=false;
+  D.log("kalibratie niet gelezen");
+  return false;
 }
 async function reqPH(D,obj,timeout){
   const ndv=await D.nref.readValue(); const nonce=new Uint8Array(ndv.buffer.slice(0,20));
@@ -294,6 +297,7 @@ function renderPH(D){D.card.querySelector(".v1").textContent=D.ph!=null?D.ph.toF
 async function measurePH(D){if(D.measuring)return;D.measuring=true;
   D.card.querySelector(".meet").disabled=true;D.card.querySelector(".meet").textContent="Meten\u2026";D.setStatus("Meten\u2026","busy");
   try{await reqPH(D,{op:"led"},3000);}catch(e){}
+  if(!D.cal){ D.log("kalibratie opnieuw lezen"); await loadCal(D); }
   const samples=[],t0=Date.now();let got=0;
   while(Date.now()-t0<12000){
     let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){await sleep(300);continue;}
