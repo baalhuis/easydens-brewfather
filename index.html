@@ -273,12 +273,10 @@ async function setupPH(dev,server,svc){
   card.querySelector(".meet").disabled=true;
   D.onChunk=e=>onPhChunk(D,e.target.value); // vaste functie-referentie: nooit dubbel geregistreerd
   io.addEventListener("characteristicvaluechanged",D.onChunk);
-  await readIV(D);
   D.log("verbonden");
-  // Geen enkel antwoord = meter hangt nog in een oude sessie (bv. browser niet netjes afgesloten).
-  // Dan de verbinding volledig verbreken en opnieuw opbouwen: de software-versie van uit/aan zetten.
-  let ok=await handshakePH(D);
-  for(let r=1;!ok&&r<=2;r++){ D.log("geen antwoord: verbinding opnieuw opbouwen ("+r+"/2)"); ok=(await reconnectPH(D,r*2000))&&(await handshakePH(D)); }
+  let ok=await syncPH(D);
+  // Lukt het echt niet: verbinding volledig verbreken en opnieuw opbouwen (software-versie van uit/aan zetten).
+  for(let r=1;!ok&&r<=2;r++){ D.log("verbinding opnieuw opbouwen ("+r+"/2)"); ok=(await reconnectPH(D,r*2000))&&(await syncPH(D)); }
   if(ok) await loadCal(D); else D.log("meter reageert niet: zet de pH2Go uit en aan en verbind opnieuw");
   D.card.querySelector(".meet").disabled=false;
   D.setStatus(D.cal?"Klaar":"Klaar (kalibratie niet gelezen)",D.cal?"":"err");
@@ -301,13 +299,26 @@ async function phDecode(key,iv,buf){
   }
   return null;
 }
-// De meter maakt bij ELKE leesactie een nieuwe nonce. Daarom (net als de officiele app) alleen lezen direct na verbinden.
-async function readIV(D){ const n=u8(await D.nref.readValue()).slice(); D.iv=md5bytes(n.slice(3,19)); D.log("sessie "+hex(n.slice(0,3))); }
-// Handshake (led). True zodra de meter iets terugstuurt, ook een foutantwoord: dan leeft de sessie.
-async function handshakePH(D){
-  for(let a=1;a<=2;a++){
-    try{const r=await reqPH(D,{op:"led"},2500,"led"); if(r.op===false)D.log("led: meterfout e="+r.e); return true;}
-    catch(e){D.log("led: "+rxInfo(e));}
+// Sessiesleutel vaststellen (uit PacketLogger-opnames):
+//  - de meter maakt bij ELKE leesactie van de nonce een nieuwe; alleen de laatst gelezen telt;
+//  - Bluefy leest de nonce zelf ook (bij het opvragen van kenmerken). Eerst laten uitrazen, dan zelf lezen;
+//  - IV = md5 van 16 bytes uit de nonce, vanaf een positie die per nonce verschilt (gezien: 3 en 2,
+//    passend bij nonce[1]&3). Die eerst proberen, daarna de andere posities: alleen de juiste krijgt antwoord.
+async function syncPH(D){
+  for(let round=1;round<=2;round++){
+    await sleep(700);
+    let n; try{ n=u8(await D.nref.readValue()).slice(); }catch(e){ D.log("nonce lezen mislukt: "+(e.message||e)); return false; }
+    const guess=n[1]&3, offs=[guess,...[0,1,2,3,4].filter(x=>x!==guess)];
+    D.log("sessie "+hex(n.slice(0,3)));
+    for(const off of offs){
+      D.iv=md5bytes(n.slice(off,off+16));
+      try{
+        const r=await reqPH(D,{op:"led"},1200,"led");
+        D.log("sleutel gevonden (positie "+off+(off===guess?"":", verwacht "+guess)+")"+(r.op===false?", meterfout e="+r.e:""));
+        return true;
+      }catch(e){ if(e.rx>0) D.log("positie "+off+": "+rxInfo(e)); }
+    }
+    D.log("geen passende sleutel (ronde "+round+"/2)");
   }
   return false;
 }
@@ -324,7 +335,6 @@ async function reconnectPH(D,waitMs){
     D.nref=await svc.getCharacteristic(PH.nonce);
     D.io.addEventListener("characteristicvaluechanged",D.onChunk);
     D.toggle=true; D.alive=true; D.buf=new Uint8Array(0);
-    await readIV(D);
     D.log("opnieuw verbonden");
     return true;
   }catch(e){ D.log("opnieuw verbinden mislukt: "+(e.message||e)); return false; }
@@ -404,7 +414,7 @@ async function measurePH(D){if(D.measuring)return;D.measuring=true;
     let r;
     try{r=await reqPH(D,{op:"meas"},4000,"mv");miss=0;}
     catch(e){D.log("meting: "+rxInfo(e)+", opnieuw");
-      if(++miss>=2&&rec<1){rec++;miss=0;D.log("verbinding opnieuw opbouwen");if(await reconnectPH(D))await handshakePH(D);}
+      if(++miss>=2&&rec<1){rec++;miss=0;D.log("verbinding opnieuw opbouwen");if(await reconnectPH(D))await syncPH(D);}
       continue;}
     if(r.op===false){lastErr=r.e;D.log("meting: meterfout e="+r.e+", opnieuw");await sleep(800);continue;}
     got++;if(got===1)D.log("meting: "+JSON.stringify(r).slice(0,120));
