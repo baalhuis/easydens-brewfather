@@ -122,9 +122,11 @@ async function readStr(svcOrServer,uuid){
 async function readBytes(server,uuid){
   const dis=await server.getPrimaryService(DIS);
   const dv=await (await dis.getCharacteristic(uuid)).readValue();
-  return new Uint8Array(dv.buffer.slice(0,dv.byteLength));
+  return u8(dv).slice();
 }
 const hex=u=>[...u].map(x=>x.toString(16).padStart(2,"0")).join("");
+// Bytes van een DataView, met respect voor byteOffset/byteLength (sommige browsers geven een view op een grotere buffer).
+const u8=v=>new Uint8Array(v.buffer,v.byteOffset,v.byteLength);
 
 const devices=[];
 let batchesLoaded=false;
@@ -208,7 +210,7 @@ async function setupED(dev,server,svc){
   card.querySelector(".tgt").addEventListener("change",()=>renderED(D));
   card.querySelector(".meet").addEventListener("click",()=>measureED(D));
   card.querySelector(".w").addEventListener("click",()=>writeED(D));
-  async function dec(dv){const ct=new Uint8Array(dv.buffer.slice(0,16));
+  async function dec(dv){const ct=u8(dv).slice(0,16);
     try{const pt=await crypto.subtle.decrypt({name:"AES-CBC",iv:ZIV},key,ct);const f=new DataView(pt).getFloat32(0,true);return Number.isNaN(f)?null:f;}catch(e){return null;}}
   await tempC.startNotifications();
   tempC.addEventListener("characteristicvaluechanged",async e=>{const v=await dec(e.target.value);if(v!=null){D.temp=v;renderED(D);}});
@@ -257,7 +259,7 @@ async function setupPH(dev,server,svc){
   const card=makeCard("pH2Go","SN "+board);
   card.querySelector(".k1").textContent="pH";
   const D={type:"ph",dev,key,iv:null,io,nref,alive:true,ph:null,temp:null,mv:null,cal:null,measuring:false,card,
-    setStatus:cardStatus(card),log:(s)=>logLine("pH2Go: "+s),buf:new Uint8Array(0),pending:null};
+    setStatus:cardStatus(card),log:(s)=>logLine("pH2Go: "+s),buf:new Uint8Array(0),waiter:null,q:null,toggle:true};
   devices.push(D);
   card.querySelector(".wrap").innerHTML=`<label>Schrijf pH naar</label>
     <select class="tgt" style="margin-bottom:12px">
@@ -269,71 +271,125 @@ async function setupPH(dev,server,svc){
   card.querySelector(".meet").addEventListener("click",()=>measurePH(D));
   card.querySelector(".w").addEventListener("click",()=>writePH(D));
   card.querySelector(".meet").disabled=true;
-  await io.startNotifications();
-  io.addEventListener("characteristicvaluechanged",async e=>{
-    const chunk=new Uint8Array(e.target.value.buffer);
-    D.log("rx "+chunk.length+"B");
-    const nb=new Uint8Array(D.buf.length+chunk.length);nb.set(D.buf);nb.set(chunk,D.buf.length);D.buf=nb;
-    if(D.buf.length%16===0){try{
-      const pt=await crypto.subtle.decrypt({name:"AES-CBC",iv:D.iv},D.key,D.buf);
-      const obj=JSON.parse(new TextDecoder().decode(pt).replace(/\0+$/,"").trim());
-      const r=D.pending;D.pending=null;D.buf=new Uint8Array(0);if(r)r(obj);
-    }catch(err){}}});
+  io.addEventListener("characteristicvaluechanged",e=>onPhChunk(D,e.target.value));
+  await readIV(D);
   D.log("verbonden");
-  await sleep(700); // even opwarmen; de eerste commando's na verbinden kunnen anders wegvallen
-  try{await reqPH(D,{op:"led"},4000);}catch(e){D.log("led timeout");}
+  // Handshake zoals de officiele app. De eerste led dient ook om een eventueel vervuilde meterbuffer leeg te maken.
+  for(let a=1;a<=2;a++){
+    try{const r=await reqPH(D,{op:"led"},2500,"led"); if(r.op!==false)break; D.log("led: meterfout e="+r.e);}
+    catch(e){D.log("led: geen antwoord"); await readIV(D).catch(()=>{});}
+  }
   await loadCal(D);
   D.card.querySelector(".meet").disabled=false;
+  D.setStatus(D.cal?"Klaar":"Klaar (kalibratie niet gelezen)",D.cal?"":"err");
+}
+
+// ---- pH2Go-protocol: byte-exact gelijk aan de officiele Anton Paar-app (geverifieerd met PacketLogger-opnames) ----
+// Opdracht = compacte JSON + afsluitende nul-byte, AES-CBC met PKCS7. Zonder de nul-byte leest de firmware door in oude buffer-data.
+async function phEncrypt(key,iv,obj){
+  const js=new TextEncoder().encode(JSON.stringify(obj)), pt=new Uint8Array(js.length+1); pt.set(js);
+  return new Uint8Array(await crypto.subtle.encrypt({name:"AES-CBC",iv},key,pt));
+}
+// Antwoord = een CBC-stroom vanaf de vaste IV, in stukjes van 16 bytes. Er kunnen oude stukjes voor zitten: probeer elk 16-byte startpunt.
+async function phDecode(key,iv,buf){
+  for(let k=0;k+16<=buf.length;k+=16){
+    try{const pt=new Uint8Array(await crypto.subtle.decrypt({name:"AES-CBC",iv},key,buf.slice(k)));
+      let n=pt.indexOf(0); if(n<0)n=pt.length;
+      const obj=JSON.parse(new TextDecoder().decode(pt.slice(0,n)));
+      if(obj&&typeof obj==="object")return obj;
+    }catch(e){}
+  }
+  return null;
+}
+// De nonce (en dus de IV) is vast per verbinding: de officiele app leest hem een keer.
+async function readIV(D){ D.iv=md5bytes(u8(await D.nref.readValue()).slice(3,19)); }
+async function onPhChunk(D,v){
+  const w=D.waiter; if(!w)return; // niemand wacht op antwoord: late/oude stukjes weggooien
+  const c=u8(v), nb=new Uint8Array(D.buf.length+c.length); nb.set(D.buf); nb.set(c,D.buf.length);
+  D.buf=nb.length>2048?nb.slice(nb.length-2048):nb;
+  if(D.buf.length%16)return;
+  const obj=await phDecode(D.key,D.iv,D.buf);
+  if(!obj||D.waiter!==w)return;
+  if(obj.op===false||!w.expect||(w.expect in obj)){ D.waiter=null; D.buf=new Uint8Array(0); w.done(obj); }
+  else D.buf=new Uint8Array(0); // antwoord op een eerdere opdracht: negeren
+}
+// Een opdracht tegelijk. Per opdracht: notificaties aan -> schrijven -> antwoord -> notificaties uit (zoals de officiele app).
+function reqPH(D,obj,timeout,expect){
+  const run=async()=>{
+    if(D.toggle){
+      try{ await D.io.startNotifications(); }
+      catch(e){ D.toggle=false; D.log("notificaties blijvend aan ("+(e.message||e)+")"); try{await D.io.startNotifications();}catch(_){} }
+    }
+    D.buf=new Uint8Array(0);
+    let w; const p=new Promise((res,rej)=>{
+      const t=setTimeout(()=>{ if(D.waiter===w)D.waiter=null; rej(new Error("timeout")); },timeout||3000);
+      w={expect,done:o=>{clearTimeout(t);res(o);}}; D.waiter=w;
+    });
+    p.catch(()=>{});
+    try{
+      const payload=await phEncrypt(D.key,D.iv,obj);
+      try{ await D.io.writeValueWithResponse(payload); }
+      catch(err){ await D.io.writeValueWithoutResponse(payload); }
+      return await p;
+    }finally{
+      if(D.waiter===w)D.waiter=null;
+      if(D.toggle){ try{ await D.io.stopNotifications(); }catch(e){} }
+    }
+  };
+  const next=(D.q||Promise.resolve()).then(run,run);
+  D.q=next.catch(()=>{});
+  return next;
 }
 async function loadCal(D){
-  for(let a=1;a<=4;a++){
-    try{const c=await reqPH(D,{op:"rcalib"},5000);
-      if(c&&Array.isArray(c.calib)&&c.calib.length>=2){const[p,q]=c.calib;
-        D.cal={m:q.mv,p:q.ph,slope:(p.ph-q.ph)/(p.mv-q.mv)};
-        D.log(`kalib: pH${p.ph}@${p.mv} / pH${q.ph}@${q.mv}`);return true;}
-    }catch(e){D.log("kalib timeout (poging "+a+")");}
-    await sleep(400);
+  for(let a=1;a<=3;a++){
+    try{const c=await reqPH(D,{op:"rcalib"},4000,"calib");
+      if(c.op===false) D.log("kalibratie: meterfout e="+c.e);
+      else if(Array.isArray(c.calib)&&c.calib.length>=2){
+        D.cal=c.calib.filter(x=>typeof x.ph==="number"&&typeof x.mv==="number").map(x=>({ph:x.ph,mv:x.mv})).sort((x,y)=>x.mv-y.mv);
+        D.log("kalib"+(c.bufferset?" ("+c.bufferset+")":"")+": "+D.cal.map(x=>"pH "+x.ph+" @ "+x.mv.toFixed(1)+" mV").join(" / "));
+        return true;
+      } else D.log("kalibratie: onbekend formaat");
+    }catch(e){ D.log("kalibratie: geen antwoord (poging "+a+")"); await readIV(D).catch(()=>{}); }
+    await sleep(300);
   }
   D.log("kalibratie niet gelezen");
   return false;
 }
-async function reqPH(D,obj,timeout){
-  const ndv=await D.nref.readValue(); const nonce=new Uint8Array(ndv.buffer.slice(0,20));
-  D.iv=md5bytes(nonce.slice(3,19));
-  const data=new TextEncoder().encode(JSON.stringify(obj));
-  const ab=await crypto.subtle.encrypt({name:"AES-CBC",iv:D.iv},D.key,data);
-  const p=new Promise((res,rej)=>{D.pending=res;setTimeout(()=>{if(D.pending===res){D.pending=null;rej(new Error("timeout"));}},timeout||3000);});
-  D.buf=new Uint8Array(0);
-  const payload=new Uint8Array(ab);
-  try{ if(D.io.properties.write) await D.io.writeValueWithResponse(payload); else await D.io.writeValueWithoutResponse(payload); }
-  catch(err){ try{ await D.io.writeValueWithoutResponse(payload); }catch(e2){ D.log("write faalt: "+(e2.message||e2)); throw e2; } }
-  return p;
+// pH uit mV: lineair tussen de twee kalibratiepunten rond de meting (meerpunts-kalibratie werkt ook).
+function phFrom(D,mv){
+  const c=D.cal; if(!c||c.length<2||mv==null)return null;
+  let i=0; while(i<c.length-2&&mv>c[i+1].mv)i++;
+  const a=c[i],b=c[i+1]; return a.ph+(mv-a.mv)*(b.ph-a.ph)/(b.mv-a.mv);
 }
-const phFrom=(D,mv)=>D.cal?D.cal.p+(mv-D.cal.m)*D.cal.slope:null;
 function renderPH(D){D.card.querySelector(".v1").textContent=D.ph!=null?D.ph.toFixed(2):"\u2014";
   D.card.querySelector(".v2").textContent=D.temp!=null?D.temp.toFixed(2):"\u2014";
   D.card.querySelector(".raw").textContent=D.mv!=null?`${D.mv.toFixed(1)} mV`:"";
   const t=D.card.querySelector(".tgt")?.value;
   D.card.querySelector(".w").disabled=D.measuring||D.ph==null||(t!=="stream"&&!$("batch").value);}
 async function measurePH(D){if(D.measuring)return;D.measuring=true;
-  D.card.querySelector(".meet").disabled=true;D.card.querySelector(".meet").textContent="Meten\u2026";D.setStatus("Meten\u2026","busy");
-  try{await reqPH(D,{op:"led"},3000);}catch(e){}
+  const btn=D.card.querySelector(".meet");btn.disabled=true;btn.textContent="Meten\u2026";D.setStatus("Meten\u2026","busy");
+  D.ph=null;renderPH(D);
   if(!D.cal){ D.log("kalibratie opnieuw lezen"); await loadCal(D); }
-  const samples=[],t0=Date.now();let got=0;
-  while(Date.now()-t0<12000){
-    let r;try{r=await reqPH(D,{op:"meas"},3000);}catch(e){await sleep(300);continue;}
-    got++;if(got===1)D.log("meas: "+JSON.stringify(r).slice(0,140));
+  const samples=[],t0=Date.now();let got=0,stable=false,lastErr=null;
+  while(Date.now()-t0<20000){
+    let r;
+    try{r=await reqPH(D,{op:"meas"},4000,"mv");}
+    catch(e){D.log("meting: geen antwoord, opnieuw");await readIV(D).catch(()=>{});continue;}
+    if(r.op===false){lastErr=r.e;D.log("meting: meterfout e="+r.e+", opnieuw");await sleep(800);continue;}
+    got++;if(got===1)D.log("meting: "+JSON.stringify(r).slice(0,120));
     if(typeof r.mv==="number")D.mv=r.mv;
     if(typeof r.t==="number")D.temp=r.t;
-    const dph=(typeof r.ph==="number")?r.ph:phFrom(D,typeof r.mv==="number"?r.mv:null);
-    if(dph!=null){D.ph=dph;renderPH(D);samples.push(dph);const last=samples.slice(-5);
-      if(last.length>=5&&Math.max(...last)-Math.min(...last)<0.02)break;}
+    const v=(typeof r.ph==="number")?r.ph:phFrom(D,D.mv);
+    if(v!=null){D.ph=v;samples.push(v);renderPH(D);const last=samples.slice(-5);
+      if(last.length>=5&&Math.max(...last)-Math.min(...last)<0.02){stable=true;break;}}
     else renderPH(D);
-    await sleep(400);
+    await sleep(600);
   }
-  if(got===0)D.log("meas: geen antwoord (meter in standby? tik nogmaals Meet)");
-  D.measuring=false;D.card.querySelector(".meet").disabled=false;D.card.querySelector(".meet").textContent="Meet";
-  D.setStatus(D.ph!=null?"Stabiel \u2713 pH "+D.ph.toFixed(2):"Geen meting",D.ph!=null?"on":"err");renderPH(D);}
+  D.measuring=false;btn.disabled=false;btn.textContent="Meet";
+  if(D.ph!=null) D.setStatus((stable?"Stabiel \u2713 pH ":"Niet stabiel: pH ")+D.ph.toFixed(2),stable?"on":"busy");
+  else if(D.mv!=null) D.setStatus("Alleen mV (kalibratie niet gelezen)","err");
+  else D.setStatus(lastErr!=null?"Meterfout e="+lastErr:"Geen antwoord van meter","err");
+  renderPH(D);}
 async function writePH(D){const t=D.card.querySelector(".tgt").value;
   const body=t==="stream"?{ph:D.ph,temp:D.temp,deviceName:"pH2Go",patch:false,stream:true}
     :{batchId:$("batch").value,ph:D.ph,temp:D.temp,field:"measuredMashPh",deviceName:"pH2Go",patch:true,stream:false};
