@@ -301,7 +301,7 @@ async function phDecode(key,iv,buf){
   }
   return null;
 }
-// De nonce (en dus de IV) is vast per verbinding: de officiele app leest hem een keer.
+// De meter maakt bij ELKE leesactie een nieuwe nonce. Daarom (net als de officiele app) alleen lezen direct na verbinden.
 async function readIV(D){ const n=u8(await D.nref.readValue()).slice(); D.iv=md5bytes(n.slice(3,19)); D.log("sessie "+hex(n.slice(0,3))); }
 // Handshake (led). True zodra de meter iets terugstuurt, ook een foutantwoord: dan leeft de sessie.
 async function handshakePH(D){
@@ -378,7 +378,7 @@ async function loadCal(D){
         D.log("kalib"+(c.bufferset?" ("+c.bufferset+")":"")+": "+D.cal.map(x=>"pH "+x.ph+" @ "+x.mv.toFixed(1)+" mV").join(" / "));
         return true;
       } else D.log("kalibratie: onbekend formaat");
-    }catch(e){ D.log("kalibratie: "+rxInfo(e)+" (poging "+a+")"); await readIV(D).catch(()=>{}); }
+    }catch(e){ D.log("kalibratie: "+rxInfo(e)+" (poging "+a+")"); }
     await sleep(300);
   }
   D.log("kalibratie niet gelezen");
@@ -405,7 +405,6 @@ async function measurePH(D){if(D.measuring)return;D.measuring=true;
     try{r=await reqPH(D,{op:"meas"},4000,"mv");miss=0;}
     catch(e){D.log("meting: "+rxInfo(e)+", opnieuw");
       if(++miss>=2&&rec<1){rec++;miss=0;D.log("verbinding opnieuw opbouwen");if(await reconnectPH(D))await handshakePH(D);}
-      else await readIV(D).catch(()=>{});
       continue;}
     if(r.op===false){lastErr=r.e;D.log("meting: meterfout e="+r.e+", opnieuw");await sleep(800);continue;}
     got++;if(got===1)D.log("meting: "+JSON.stringify(r).slice(0,120));
