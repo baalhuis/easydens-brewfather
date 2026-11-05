@@ -410,13 +410,15 @@ async function measurePH(D){if(D.measuring)return;D.measuring=true;
   const btn=D.card.querySelector(".meet");btn.disabled=true;btn.textContent="Meten\u2026";D.setStatus("Meten\u2026","busy");
   D.ph=null;renderPH(D);
   if(!D.cal){ D.log("kalibratie opnieuw lezen"); await loadCal(D); }
-  const samples=[],t0=Date.now();let got=0,stable=false,lastErr=null,miss=0,rec=0;
+  const samples=[],t0=Date.now();let got=0,stable=false,lastErr=null,miss=0,rec=0,noSample=false;
   while(Date.now()-t0<20000){
     let r;
     try{r=await reqPH(D,{op:"meas"},4000,"mv");miss=0;}
     catch(e){D.log("meting: "+rxInfo(e)+", opnieuw");
       if(++miss>=2&&rec<1){rec++;miss=0;D.log("verbinding opnieuw opbouwen");if(await reconnectPH(D))await syncPH(D);}
       continue;}
+    // e=-17: geen sample (elektrode niet in vloeistof). Niet opnieuw proberen, direct melden.
+    if(r.op===false&&r.e===-17){noSample=true;D.ph=null;D.mv=null;D.log("meting: geen sample gevonden");break;}
     if(r.op===false){lastErr=r.e;D.log("meting: meterfout e="+r.e+", opnieuw");await sleep(800);continue;}
     got++;if(got===1)D.log("meting: "+JSON.stringify(r).slice(0,120));
     if(typeof r.mv==="number")D.mv=r.mv;
@@ -428,7 +430,8 @@ async function measurePH(D){if(D.measuring)return;D.measuring=true;
     await sleep(600);
   }
   D.measuring=false;btn.disabled=false;btn.textContent="Meet";
-  if(D.ph!=null) D.setStatus((stable?"Stabiel \u2713 pH ":"Niet stabiel: pH ")+D.ph.toFixed(2),stable?"on":"busy");
+  if(noSample) D.setStatus("Geen sample gevonden: dompel de elektrode in het monster","err");
+  else if(D.ph!=null) D.setStatus((stable?"Stabiel \u2713 pH ":"Niet stabiel: pH ")+D.ph.toFixed(2),stable?"on":"busy");
   else if(D.mv!=null) D.setStatus("Alleen mV (kalibratie niet gelezen)","err");
   else D.setStatus(lastErr!=null?"Meterfout e="+lastErr:"Geen antwoord van meter","err");
   renderPH(D);}
