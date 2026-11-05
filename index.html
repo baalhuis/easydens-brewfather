@@ -302,13 +302,14 @@ async function phDecode(key,iv,buf){
 // Sessiesleutel vaststellen (uit PacketLogger-opnames):
 //  - de meter maakt bij ELKE leesactie van de nonce een nieuwe; alleen de laatst gelezen telt;
 //  - Bluefy leest de nonce zelf ook (bij het opvragen van kenmerken). Eerst laten uitrazen, dan zelf lezen;
-//  - IV = md5 van 16 bytes uit de nonce, vanaf een positie die per nonce verschilt (gezien: 3 en 2,
-//    passend bij nonce[1]&3). Die eerst proberen, daarna de andere posities: alleen de juiste krijgt antwoord.
+//  - IV = md5 van 16 bytes uit de nonce, vanaf een positie die per nonce verschilt (2 of 3).
+//    Vermoedelijke regel eerst proberen, daarna de andere posities: alleen de juiste krijgt antwoord.
 async function syncPH(D){
   for(let round=1;round<=2;round++){
     await sleep(700);
     let n; try{ n=u8(await D.nref.readValue()).slice(); }catch(e){ D.log("nonce lezen mislukt: "+(e.message||e)); return false; }
-    const guess=n[1]&3, offs=[guess,...[0,1,2,3,4].filter(x=>x!==guess)];
+    // Waargenomen: ca..->3, f5..->2, da..->3 => positie = 3-(nonce[0]&1), altijd 2 of 3. Eerst die, dan de rest als vangnet.
+    const guess=3-(n[0]&1), offs=[guess,5-guess,0,1,4];
     D.log("sessie "+hex(n.slice(0,3)));
     for(const off of offs){
       D.iv=md5bytes(n.slice(off,off+16));
