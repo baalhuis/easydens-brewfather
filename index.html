@@ -129,19 +129,40 @@ const hex=u=>[...u].map(x=>x.toString(16).padStart(2,"0")).join("");
 const devices=[];
 let batchesLoaded=false;
 
+async function tryKnown(kind){
+  if(!navigator.bluetooth.getDevices) return null;
+  let known; try{ known=await navigator.bluetooth.getDevices(); }catch(e){ return null; }
+  const isPh=d=>/ph2go/i.test(d.name||"");
+  const cands=known.filter(d=> kind==="ph"?isPh(d):!isPh(d));
+  for(const d of cands){
+    try{
+      const server=await d.gatt.connect();
+      const want=kind==="ph"?PH.svc:ED.svc;
+      try{ const svc=await server.getPrimaryService(want); return {dev:d,server,svc,type:kind==="ph"?"ph2go":"easydens"}; }
+      catch(e){ try{d.gatt.disconnect();}catch(_){} }
+    }catch(e){}
+  }
+  return null;
+}
 async function connect(kind){
   try{
     if(devices.some(d=>d.alive && ((kind==="ed"&&d.type==="ed")||(kind==="ph"&&d.type==="ph")))){ setState("Al verbonden","on"); return; }
-    setState("Zoeken\u2026","busy");
-    const dev = kind==="ed"
-      ? await navigator.bluetooth.requestDevice({filters:[{services:[ED.svc]}],optionalServices:[DIS,ED.svc,PH.svc]})
-      : await navigator.bluetooth.requestDevice({filters:[{namePrefix:"pH2Go"}],optionalServices:[DIS,ED.svc,PH.svc]});
     setState("Verbinden\u2026","busy");
-    const server=await dev.gatt.connect();
-    let type=null,svc=null;
-    try{ svc=await server.getPrimaryService(ED.svc); type="easydens"; }catch(e){}
-    if(!type){ try{ svc=await server.getPrimaryService(PH.svc); type="ph2go"; }catch(e){} }
-    if(!type){ setState("Onbekend apparaat","err"); return; }
+    let picked=await tryKnown(kind);
+    if(!picked){
+      setState("Zoeken\u2026","busy");
+      const dev = kind==="ed"
+        ? await navigator.bluetooth.requestDevice({filters:[{services:[ED.svc]}],optionalServices:[DIS,ED.svc,PH.svc]})
+        : await navigator.bluetooth.requestDevice({filters:[{namePrefix:"pH2Go"}],optionalServices:[DIS,ED.svc,PH.svc]});
+      setState("Verbinden\u2026","busy");
+      const server=await dev.gatt.connect();
+      let type=null,svc=null;
+      try{ svc=await server.getPrimaryService(ED.svc); type="easydens"; }catch(e){}
+      if(!type){ try{ svc=await server.getPrimaryService(PH.svc); type="ph2go"; }catch(e){} }
+      if(!type){ setState("Onbekend apparaat","err"); return; }
+      picked={dev,server,svc,type};
+    }
+    const {dev,server,svc,type}=picked;
     dev.addEventListener("gattserverdisconnected",()=>{ const d=devices.find(x=>x.dev===dev); if(d){d.alive=false;d.setStatus("Verbinding verbroken","err");} });
     if(type==="easydens") await setupED(dev,server,svc);
     else await setupPH(dev,server,svc);
