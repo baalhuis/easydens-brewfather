@@ -135,7 +135,7 @@ async function connect(kind){
     setState("Zoeken\u2026","busy");
     const dev = kind==="ed"
       ? await navigator.bluetooth.requestDevice({filters:[{services:[ED.svc]}],optionalServices:[DIS,ED.svc,PH.svc]})
-      : await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:[DIS,ED.svc,PH.svc]});
+      : await navigator.bluetooth.requestDevice({filters:[{namePrefix:"pH2Go"}],optionalServices:[DIS,ED.svc,PH.svc]});
     setState("Verbinden\u2026","busy");
     const server=await dev.gatt.connect();
     let type=null,svc=null;
