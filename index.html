@@ -129,33 +129,19 @@ const hex=u=>[...u].map(x=>x.toString(16).padStart(2,"0")).join("");
 const devices=[];
 let batchesLoaded=false;
 
-// onthoud welk apparaat de EasyDens / pH2Go was en reconnect zonder lijst
-function rememberId(kind,id){ try{ if(id) localStorage.setItem(kind+"_id",id); }catch(e){} }
-async function pickDevice(kind){
-  try{
-    const stored=localStorage.getItem(kind+"_id");
-    if(stored && navigator.bluetooth.getDevices){
-      const ds=await navigator.bluetooth.getDevices();
-      const d=ds.find(x=>x.id===stored);
-      if(d) return d;
-    }
-  }catch(e){}
-  if(kind==="ed") return navigator.bluetooth.requestDevice({filters:[{services:[ED.svc]}],optionalServices:[DIS,ED.svc,PH.svc]});
-  return navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:[DIS,ED.svc,PH.svc]});
-}
 async function connect(kind){
   try{
-    // al verbonden met een levend apparaat van dit type? dan niets doen
     if(devices.some(d=>d.alive && ((kind==="ed"&&d.type==="ed")||(kind==="ph"&&d.type==="ph")))){ setState("Al verbonden","on"); return; }
     setState("Zoeken\u2026","busy");
-    const dev=await pickDevice(kind);
+    const dev = kind==="ed"
+      ? await navigator.bluetooth.requestDevice({filters:[{services:[ED.svc]}],optionalServices:[DIS,ED.svc,PH.svc]})
+      : await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:[DIS,ED.svc,PH.svc]});
     setState("Verbinden\u2026","busy");
     const server=await dev.gatt.connect();
     let type=null,svc=null;
     try{ svc=await server.getPrimaryService(ED.svc); type="easydens"; }catch(e){}
     if(!type){ try{ svc=await server.getPrimaryService(PH.svc); type="ph2go"; }catch(e){} }
     if(!type){ setState("Onbekend apparaat","err"); return; }
-    rememberId(type==="easydens"?"ed":"ph", dev.id);
     dev.addEventListener("gattserverdisconnected",()=>{ const d=devices.find(x=>x.dev===dev); if(d){d.alive=false;d.setStatus("Verbinding verbroken","err");} });
     if(type==="easydens") await setupED(dev,server,svc);
     else await setupPH(dev,server,svc);
